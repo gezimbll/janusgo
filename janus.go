@@ -4,6 +4,7 @@ package janus
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/xid"
+	"nhooyr.io/websocket"
 )
 
 var debug = false
@@ -50,9 +51,10 @@ func generateTransactionId() xid.ID {
 
 // Connect initiates a webscoket connection with the Janus Gateway
 func Connect(wsURL string) (*Gateway, error) {
-	websocket.DefaultDialer.Subprotocols = []string{"janus-protocol"}
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
+		Subprotocols: []string{"janus-protocol"},
+	})
 
 	if err != nil {
 		return nil, err
@@ -73,7 +75,7 @@ func Connect(wsURL string) (*Gateway, error) {
 
 // Close closes the underlying connection to the Gateway.
 func (gateway *Gateway) Close() error {
-	return gateway.conn.Close()
+	return gateway.conn.Close(websocket.StatusNormalClosure, "")
 }
 
 // GetErrChan returns a channels through which the caller can check and react to connectivity errors
@@ -105,7 +107,7 @@ func (gateway *Gateway) send(msg map[string]interface{}, transaction chan interf
 	}
 
 	gateway.writeMu.Lock()
-	err = gateway.conn.WriteMessage(websocket.TextMessage, data)
+	err = gateway.conn.Write(context.Background(), websocket.MessageText, data)
 	gateway.writeMu.Unlock()
 
 	if err != nil {
@@ -129,7 +131,7 @@ func (gateway *Gateway) ping() {
 	for {
 		select {
 		case <-ticker.C:
-			err := gateway.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(20*time.Second))
+			err := gateway.conn.Ping(context.Background())
 			if err != nil {
 				select {
 				case gateway.errors <- err:
@@ -155,7 +157,7 @@ func (gateway *Gateway) recv() {
 		// Decode to Msg struct
 		var base BaseMsg
 
-		_, data, err := gateway.conn.ReadMessage()
+		_, data, err := gateway.conn.Read(context.Background())
 		if err != nil {
 			select {
 			case gateway.errors <- err:
@@ -461,9 +463,11 @@ GetMessage: // No tears..
 // a new PeerConnection with a plugin.
 // candidate should be a single ICE candidate, or a completed object to
 // signify that all candidates have been sent:
-//		{
-//			"completed": true
-//		}
+//
+//	{
+//		"completed": true
+//	}
+//
 // On success, an AckMsg will be returned and error will be nil.
 func (handle *Handle) Trickle(candidate interface{}) (*AckMsg, error) {
 	req, ch := newRequest("trickle")
