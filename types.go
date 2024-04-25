@@ -31,16 +31,29 @@ var msgtypes = map[string]func() interface{}{
 	"hangup":      func() interface{} { return &HangupMsg{} },
 	"slowlink":    func() interface{} { return &SlowLinkMsg{} },
 	"timeout":     func() interface{} { return &TimeoutMsg{} },
+	"destroy":     func() interface{} { return &BaseMsg{} },
 }
 
 type BaseMsg struct {
 	Type    string `json:"janus"`
 	ID      string `json:"transaction"`
-	Session uint64 `json:"session_id"`
-	Handle  uint64 `json:"sender"`
+	Session uint64 `json:"session_id,omitempty"`
+	Handle  uint64 `json:"sender,omitempty"`
+	Plugin  string `json:"plugin,omitempty"`
+}
+type HandlerMessage struct {
+	BaseMsg
+	Handle uint64         `json:"handle_id,omitempty"`
+	Body   map[string]any `json:"body"`
+}
+
+type HandlerMessageJsep struct {
+	HandlerMessage
+	Jsep map[string]any `json:"jsep,omitempty"`
 }
 
 type ErrorMsg struct {
+	BaseMsg
 	Err ErrorData `json:"error"`
 }
 
@@ -54,14 +67,13 @@ func (err *ErrorMsg) Error() string {
 }
 
 type SuccessMsg struct {
-	Data       SuccessData
-	PluginData PluginData
-	Session    uint64 `json:"session_id"`
-	Handle     uint64 `json:"sender"`
+	Type string      `json:"janus"`
+	ID   string      `json:"transaction"`
+	Data SuccessData `json:"data,omitempty"`
 }
 
 type SuccessData struct {
-	ID uint64
+	ID uint64 `json:"id"`
 }
 
 type DetachedMsg struct{}
@@ -87,41 +99,67 @@ type PluginInfo struct {
 	VersionString string `json:"version_string"`
 }
 
-type AckMsg struct{}
-
-type EventMsg struct {
-	Plugindata PluginData
-	Jsep       map[string]interface{}
-	Session    uint64 `json:"session_id"`
-	Handle     uint64 `json:"sender"`
-}
-
-type PluginData struct {
-	Plugin string
-	Data   map[string]interface{}
-}
-
-type WebRTCUpMsg struct {
-	Session uint64 `json:"session_id"`
-	Handle  uint64 `json:"sender"`
+type AckMsg struct {
+	Type string `json:"janus"`
+	ID   string `json:"transaction"`
+	Hint string `json:"hint,omitempty"`
 }
 
 type TimeoutMsg struct {
 	Session uint64 `json:"session_id"`
 }
 
+type TrickleOne struct {
+	BaseMsg
+	HandleR   uint64 `json:"handle_id,omitempty"`
+	Candidate any    `json:"candidate"`
+}
+
+type TrickleMany struct {
+	BaseMsg
+	HandleR    uint64 `json:"handle_id,omitempty"`
+	Candidates []any  `json:"candidates"`
+}
+
+// event types
+type EventMsg struct {
+	Type       string                 `json:"janus"`
+	ID         string                 `json:"transaction"`
+	Handle     uint64                 `json:"sender,omitempty"`
+	Plugindata PluginData             `json:"plugindata"`
+	Jsep       map[string]interface{} `json:"jsep"`
+}
+
+type PluginData struct {
+	Plugin string                 `json:"plugin"`
+	Data   map[string]interface{} `json:"data"`
+}
+type WebRTCUpMsg struct {
+	Type    string `json:"janus"`
+	Session uint64 `json:"session_id,omitempty"`
+	Handle  uint64 `json:"sender,omitempty"`
+}
+
 type SlowLinkMsg struct {
-	Uplink bool
-	Lost   int64
+	Type    string `json:"janus"`
+	Session uint64 `json:"session_id,omitempty"`
+	Handle  uint64 `json:"sender,omitempty"`
+	Uplink  bool
+	Lost    int64
 }
 
 type MediaMsg struct {
-	Type      string
-	Receiving bool
+	Type      string `json:"janus"`
+	Session   uint64 `json:"session_id,omitempty"`
+	Handle    uint64 `json:"sender,omitempty"`
+	Mid       string `json:"mid"`
+	MediaType string `json:"type"`
+	Receiving bool   `json:"receiving"`
 }
 
 type HangupMsg struct {
+	Type    string `json:"janus"`
 	Reason  string
-	Session uint64 `json:"session_id"`
-	Handle  uint64 `json:"sender"`
+	Session uint64 `json:"session_id,omitempty"`
+	Handle  uint64 `json:"sender,omitempty"`
 }

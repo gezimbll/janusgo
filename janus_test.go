@@ -1,6 +1,7 @@
 package janus
 
 import (
+	"context"
 	"testing"
 )
 
@@ -11,14 +12,14 @@ func Test_Connect(t *testing.T) {
 		t.Fail()
 		return
 	}
-	mess, err := client.Info()
-	if err != nil {
-		t.Fail()
-		return
-	}
-	t.Log(mess)
+	// mess, err := client.Info()
+	// if err != nil {
+	// 	t.Fail()
+	// 	return
+	// }
+	// t.Log(mess)
 
-	sess, err := client.Create()
+	sess, err := client.CreateSession(context.Background(), BaseMsg{})
 	if err != nil {
 		t.Fail()
 		return
