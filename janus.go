@@ -45,10 +45,6 @@ type Gateway struct {
 	writeMu          sync.Mutex
 }
 
-// func generateTransactionId() xid.ID {
-// 	return xid.New()
-// }
-
 // Connect initiates a webscoket connection with the Janus Gateway
 func Connect(wsURL string) (*Gateway, error) {
 
@@ -228,13 +224,12 @@ func (gateway *Gateway) recv() {
 				go passMsg(handle.Events, msg)
 			}
 		} else {
-			id := base.ID
 			// Lookup Transaction
 			gateway.Lock()
-			transaction := gateway.transactions[id]
+			transaction := gateway.transactions[base.ID]
 			switch msg.(type) {
 			case *EventMsg:
-				gateway.transactionsUsed[id] = true
+				gateway.transactionsUsed[base.ID] = true
 			}
 			gateway.Unlock()
 			if transaction == nil {
@@ -249,20 +244,26 @@ func (gateway *Gateway) recv() {
 
 // Info sends an info request to the Gateway.
 // On success, an InfoMsg will be returned and error will be nil.
-// func (gateway *Gateway) Info() (*InfoMsg, error) {
-// 	req, ch := newRequest("info")
-// 	gateway.send(req, ch)
+func (gateway *Gateway) Info(ctx context.Context, msg BaseMsg) (*InfoMsg, error) {
+	ch := make(chan any)
+	gateway.send(msg, msg.ID, ch)
 
-// 	msg := <-ch
-// 	switch msg := msg.(type) {
-// 	case *InfoMsg:
-// 		return msg, nil
-// 	case *ErrorMsg:
-// 		return nil, msg
-// 	}
+	select {
+	case msg := <-ch:
+		switch msg := msg.(type) {
+		case *InfoMsg:
+			return msg, nil
+		case *ErrorMsg:
+			return nil, msg
+		default:
+			return nil, nil
+		}
+	case <-ctx.Done():
+		gateway.transactions[msg.ID] = nil
+		return nil, fmt.Errorf("timeout waiting for response %w", ctx.Err())
 
-// 	return nil, unexpected("info")
-// }
+	}
+}
 
 // Create sends a create request to the Gateway.
 // On success, a new Session will be returned and error will be nil.
