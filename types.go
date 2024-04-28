@@ -125,6 +125,7 @@ type TrickleMany struct {
 type EventMsg struct {
 	Type       string                 `json:"janus"`
 	ID         string                 `json:"transaction"`
+	Session    uint64                 `json:"session_id"`
 	Handle     uint64                 `json:"sender,omitempty"`
 	Plugindata PluginData             `json:"plugindata"`
 	Jsep       map[string]interface{} `json:"jsep"`

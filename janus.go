@@ -35,14 +35,12 @@ type Gateway struct {
 
 	// Access to the Sessions map should be synchronized with the Gateway.Lock()
 	// and Gateway.Unlock() methods provided by the embeded sync.Mutex.
-	sync.Mutex
+	sync.RWMutex
 
-	conn             *websocket.Conn
-	transactions     map[string]chan interface{}
-	transactionsUsed map[string]bool
-	errors           chan error
-	sendChan         chan []byte
-	writeMu          sync.Mutex
+	conn          *websocket.Conn
+	receivers     map[string]chan interface{}
+	receiversUsed map[string]bool
+	errors        chan error
 }
 
 // Connect initiates a webscoket connection with the Janus Gateway
@@ -58,10 +56,9 @@ func Connect(wsURL string) (*Gateway, error) {
 
 	gateway := new(Gateway)
 	gateway.conn = conn
-	gateway.transactions = make(map[string]chan interface{})
-	gateway.transactionsUsed = make(map[string]bool)
+	gateway.receivers = make(map[string]chan interface{})
+	gateway.receiversUsed = make(map[string]bool)
 	gateway.Sessions = make(map[uint64]*Session)
-	gateway.sendChan = make(chan []byte, 100)
 	gateway.errors = make(chan error)
 
 	go gateway.ping()
@@ -82,13 +79,12 @@ func (gateway *Gateway) GetErrChan() chan error {
 func (gateway *Gateway) send(msg any, transactionID string, transaction chan interface{}) {
 
 	gateway.Lock()
-	gateway.transactions[transactionID] = transaction
-	gateway.transactionsUsed[transactionID] = false
+	gateway.receivers[transactionID] = transaction
+	gateway.receiversUsed[transactionID] = false
 	gateway.Unlock()
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		fmt.Printf("json.Marshal: %s\n", err)
 		return
 	}
 
@@ -100,15 +96,10 @@ func (gateway *Gateway) send(msg any, transactionID string, transaction chan int
 		log.WriteTo(os.Stdout)
 	}
 
-	gateway.writeMu.Lock()
-	err = gateway.conn.Write(context.Background(), websocket.MessageText, data)
-	gateway.writeMu.Unlock()
-
-	if err != nil {
+	if err = gateway.conn.Write(context.Background(), websocket.MessageText, data); err != nil {
 		select {
 		case gateway.errors <- err:
 		default:
-			fmt.Printf("conn.Write: %s\n", err)
 		}
 
 		return
@@ -156,14 +147,12 @@ func (gateway *Gateway) recv() {
 			select {
 			case gateway.errors <- err:
 			default:
-				fmt.Printf("conn.Read: %s\n", err)
 			}
 
 			return
 		}
 
 		if err := json.Unmarshal(data, &base); err != nil {
-			fmt.Printf("json.Unmarshal: %s\n", err)
 			continue
 		}
 
@@ -177,68 +166,41 @@ func (gateway *Gateway) recv() {
 
 		typeFunc, ok := msgtypes[base.Type]
 		if !ok {
-			fmt.Printf("Unknown message type received!\n")
 			continue
 		}
 
 		msg := typeFunc()
 		if err := json.Unmarshal(data, &msg); err != nil {
-			fmt.Printf("json.Unmarshal: %s\n", err)
 			continue // Decode error
 		}
 
-		var transactionUsed bool
-		if base.ID != "" {
-			id := base.ID
-			gateway.Lock()
-			transactionUsed = gateway.transactionsUsed[id]
-			gateway.Unlock()
-
-		}
-
 		// Pass message on from here
-		if base.ID == "" || transactionUsed {
-			// Is this a Handle event?
-			if base.Handle == 0 {
-				// Error()
-			} else {
-				// Lookup Session
-				gateway.Lock()
-				session := gateway.Sessions[base.Session]
-				gateway.Unlock()
-				if session == nil {
-					fmt.Printf("Unable to deliver message. Session gone?\n")
-					continue
-				}
-
-				// Lookup Handle
-				session.Lock()
-				handle := session.Handles[base.Handle]
-				session.Unlock()
-				if handle == nil {
-					fmt.Printf("Unable to deliver message. Handle gone?\n")
-					continue
-				}
-
-				// Pass msg
-				go passMsg(handle.Events, msg)
+		switch base.Type {
+		case "event", "webrtcup", "media", "slowlink", "message", "hangup", "error":
+			gateway.RLock()
+			session := gateway.Sessions[base.Session]
+			gateway.RUnlock()
+			if session == nil {
+				continue
 			}
-		} else {
+			go func() {
+				session.Events <- msg
+			}()
+		default:
 			// Lookup Transaction
 			gateway.Lock()
-			transaction := gateway.transactions[base.ID]
+			receiver := gateway.receivers[base.ID]
 			switch msg.(type) {
 			case *EventMsg:
-				gateway.transactionsUsed[base.ID] = true
+				gateway.receiversUsed[base.ID] = true
 			}
 			gateway.Unlock()
-			if transaction == nil {
-				// Error()
-			}
-
 			// Pass msg
-			go passMsg(transaction, msg)
+			go func() {
+				receiver <- msg
+			}()
 		}
+
 	}
 }
 
@@ -259,13 +221,13 @@ func (gateway *Gateway) Info(ctx context.Context, msg BaseMsg) (*InfoMsg, error)
 			return nil, nil
 		}
 	case <-ctx.Done():
-		gateway.transactions[msg.ID] = nil
+		gateway.receivers[msg.ID] = nil
 		return nil, fmt.Errorf("timeout waiting for response %w", ctx.Err())
 
 	}
 }
 
-// Create sends a create request to the Gateway.
+// CreateSession sends a create request to the Gateway.
 // On success, a new Session will be returned and error will be nil.
 func (gateway *Gateway) CreateSession(ctx context.Context, msg BaseMsg) (*SuccessMsg, error) {
 	ch := make(chan any)
@@ -278,6 +240,7 @@ func (gateway *Gateway) CreateSession(ctx context.Context, msg BaseMsg) (*Succes
 			session := new(Session)
 			session.ID = response.Data.ID
 			session.Handles = make(map[uint64]*Handle)
+			session.Events = make(chan interface{}, 2)
 			session.gateway = gateway
 			gateway.Lock()
 			gateway.Sessions[session.ID] = session
@@ -315,7 +278,7 @@ func (session *Session) send(msg any, transactionID string, transaction chan int
 	session.gateway.send(msg, transactionID, transaction)
 }
 
-// Attach sends an attach request to the Gateway within this session.
+// AttachSession sends an attach request to the Gateway within this session.
 // plugin should be the unique string of the plugin to attach to.
 // On success, a new Handle will be returned and error will be nil.
 func (session *Session) AttachSession(ctx context.Context, msg BaseMsg) (*SuccessMsg, error) {
@@ -372,31 +335,60 @@ func (session *Session) KeepAlive(ctx context.Context, msg BaseMsg) (*AckMsg, er
 
 }
 
-// Destroy sends a destroy request to the Gateway to tear down this session.
+// LongPoll will trigger events related to session sent from plugins
+// reads all the available events until maxEv is reached or timeout occurs
+func (s *Session) LongPoll(ctx context.Context, maxEv int, msg BaseMsg) (events []any, err error) {
+	events = make([]any, 0, maxEv)
+	for {
+		select {
+		case event, ok := <-s.Events:
+			if !ok {
+				// The channel was closed, return what we have
+				return
+			}
+			events = append(events, event)
+			if len(events) >= maxEv {
+				return // maximum requested was reached
+			}
+			continue
+		case <-ctx.Done():
+			events = []any{
+				map[string]string{"janus": "keepalive"},
+			}
+			return
+		default:
+			if len(events) != 0 {
+				return
+			}
+		}
+	}
+}
+
+// DestroySession sends a destroy request to the Gateway to tear down this session.
 // On success, the Session will be removed from the Gateway.Sessions map, an
 // AckMsg will be returned and error will be nil.
-func (session *Session) DestroySession(ctx context.Context, msg BaseMsg) (*AckMsg, error) {
+func (session *Session) DestroySession(ctx context.Context, msg BaseMsg) (ack *SuccessMsg, err error) {
+
 	ch := make(chan any)
 	session.send(msg, msg.ID, ch)
 
 	select {
 	case response := <-ch:
-
-		switch response := response.(type) {
-		case *AckMsg:
-
+		switch res := response.(type) {
+		case *SuccessMsg:
 			session.gateway.Lock()
 			delete(session.gateway.Sessions, session.ID)
 			session.gateway.Unlock()
-
-			return response, nil
+			return res, nil
+		case *ErrorMsg:
+			return nil, res
 		default:
 			return nil, nil
 
 		}
-
 	case <-ctx.Done():
 		return nil, fmt.Errorf("timeout waiting for response %w", ctx.Err())
+
 	}
 
 }
@@ -449,31 +441,25 @@ func (handle *Handle) Request(ctx context.Context, msg HandlerMessage) (*Success
 // Message sends a message request to a plugin handle on the Gateway.
 // body should be the plugin data to be passed to the plugin, and jsep should
 // contain an optional SDP offer/answer to establish a WebRTC PeerConnection.
-// On success, an EventMsg will be returned and error will be nil.
-func (handle *Handle) Message(ctx context.Context, msg HandlerMessageJsep) (*EventMsg, error) {
+// On success, an AckMsg will be returned and error will be nil.
+func (handle *Handle) Message(ctx context.Context, msg HandlerMessageJsep) (ack *AckMsg, err error) {
 	ch := make(chan any)
 
 	handle.send(msg, msg.ID, ch)
-
 	select {
 	case msg := <-ch:
-		// No tears..
-	GetMessage:
 		switch msg := msg.(type) {
 		case *AckMsg:
-			goto GetMessage // ..only dreams.
-		case *EventMsg:
 			return msg, nil
 		case *ErrorMsg:
 			return nil, msg
-		default:
-			return nil, nil
 		}
 
 	case <-ctx.Done():
 		return nil, fmt.Errorf("timeout waiting for response %w", ctx.Err())
 	}
 
+	return
 }
 
 // Trickle sends a trickle request to the Gateway as part of establishing
