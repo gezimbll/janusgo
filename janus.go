@@ -239,6 +239,7 @@ func (gateway *Gateway) CreateSession(ctx context.Context, msg BaseMsg) (*Succes
 		case *SuccessMsg:
 			session := new(Session)
 			session.ID = response.Data.ID
+			session.Data = make(map[string]any)
 			session.Handles = make(map[uint64]*Handle)
 			session.Events = make(chan interface{}, 2)
 			session.gateway = gateway
@@ -261,6 +262,8 @@ func (gateway *Gateway) CreateSession(ctx context.Context, msg BaseMsg) (*Succes
 type Session struct {
 	// ID is the session_id of this session
 	ID uint64
+
+	Data map[string]any // Additional data for the session injected by external sources
 
 	// Handles is a map of plugin handles within this session
 	Handles map[uint64]*Handle
@@ -360,6 +363,7 @@ func (s *Session) LongPoll(ctx context.Context, maxEv int, msg BaseMsg) (events 
 			if len(events) != 0 {
 				return
 			}
+			time.Sleep(time.Second)
 		}
 	}
 }
@@ -379,6 +383,7 @@ func (session *Session) DestroySession(ctx context.Context, msg BaseMsg) (ack *S
 			session.gateway.Lock()
 			delete(session.gateway.Sessions, session.ID)
 			session.gateway.Unlock()
+			close(session.Events)
 			return res, nil
 		case *ErrorMsg:
 			return nil, res
