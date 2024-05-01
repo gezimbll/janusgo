@@ -343,6 +343,7 @@ func (session *Session) KeepAlive(ctx context.Context, msg BaseMsg) (*AckMsg, er
 func (s *Session) LongPoll(ctx context.Context, maxEv int, msg BaseMsg) (events []any, err error) {
 	events = make([]any, 0, maxEv)
 	for {
+		evCacheTimer := time.NewTimer(time.Second)
 		select {
 		case event, ok := <-s.Events:
 			if !ok {
@@ -359,11 +360,10 @@ func (s *Session) LongPoll(ctx context.Context, maxEv int, msg BaseMsg) (events 
 				map[string]string{"janus": "keepalive"},
 			}
 			return
-		default:
+		case <-evCacheTimer.C: // fires up every second and returns what was buffered so far, if any
 			if len(events) != 0 {
 				return
 			}
-			time.Sleep(time.Second)
 		}
 	}
 }
