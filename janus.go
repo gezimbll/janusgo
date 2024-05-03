@@ -183,9 +183,7 @@ func (gateway *Gateway) recv() {
 			if session == nil {
 				continue
 			}
-			go func() {
-				session.Events <- msg
-			}()
+			session.Events <- msg
 		default:
 			// Lookup Transaction
 			gateway.Lock()
@@ -241,7 +239,7 @@ func (gateway *Gateway) CreateSession(ctx context.Context, msg BaseMsg) (*Succes
 			session.ID = response.Data.ID
 			session.Data = make(map[string]any)
 			session.Handles = make(map[uint64]*Handle)
-			session.Events = make(chan interface{}, 2)
+			session.Events = make(chan interface{}, 1000000)
 			session.gateway = gateway
 			gateway.Lock()
 			gateway.Sessions[session.ID] = session
