@@ -445,7 +445,7 @@ func (handle *Handle) Request(ctx context.Context, msg HandlerMessage) (*Success
 // body should be the plugin data to be passed to the plugin, and jsep should
 // contain an optional SDP offer/answer to establish a WebRTC PeerConnection.
 // On success, an AckMsg will be returned and error will be nil.
-func (handle *Handle) Message(ctx context.Context, msg HandlerMessageJsep) (ack *AckMsg, err error) {
+func (handle *Handle) Message(ctx context.Context, msg HandlerMessageJsep) (rpl any, err error) {
 	ch := make(chan any)
 
 	handle.send(msg, msg.ID, ch)
@@ -453,6 +453,8 @@ func (handle *Handle) Message(ctx context.Context, msg HandlerMessageJsep) (ack 
 	case msg := <-ch:
 		switch msg := msg.(type) {
 		case *AckMsg:
+			return msg, nil
+		case *SuccessMsg:
 			return msg, nil
 		case *ErrorMsg:
 			return nil, msg

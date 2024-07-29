@@ -67,9 +67,11 @@ func (err *ErrorMsg) Error() string {
 }
 
 type SuccessMsg struct {
-	Type string      `json:"janus"`
-	ID   string      `json:"transaction"`
-	Data SuccessData `json:"data,omitempty"`
+	Type       string      `json:"janus"`
+	ID         string      `json:"transaction"`
+	Handle     uint64      `json:"sender,omitempty"`
+	PluginData PluginData  `json:"plugindata"`
+	Data       SuccessData `json:"data,omitempty"`
 }
 
 type SuccessData struct {
